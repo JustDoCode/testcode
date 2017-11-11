@@ -1,0 +1,415 @@
+package com.cpgps.canbus.dubbo.service.impl;
+
+import java.io.Serializable;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.alibaba.fastjson.JSONObject;
+import com.cpgps.canbus.common.cache.RedisCache;
+import com.cpgps.canbus.dubbo.model.CanStaticDataBean;
+import com.cpgps.canbus.dubbo.service.CanStaticDataBeanService;
+import com.cpgps.canbus.dubbo.service.CarSectionAnalysisService;
+import com.cpgps.canbus.dubbo.service.DriverSectionAnalysisService;
+import com.cpgps.canbus.repository.entity.can.CarSectionAnalysisEntity;
+import com.cpgps.canbus.repository.entity.can.DriverSectionAnalysisEntity;
+import com.cpgps.canbus.repository.entity.can.DriverTaskEntity;
+import com.cpgps.canbus.repository.entity.can.DriverTaskRepository;
+import com.cpgps.canbus.repository.entity.info.CarEntity;
+import com.cpgps.canbus.repository.entity.info.CarRepository;
+import com.cpgps.canbus.repository.entity.info.DepartmentsRepository;
+import com.cpgps.canbus.repository.entity.info.DriverEntity;
+import com.cpgps.canbus.repository.entity.info.DriverRepository;
+import com.cpgps.dubboserver.ifce.CanbusDataServiceI;
+
+public class CanbusDataServiceImp implements CanbusDataServiceI, Serializable {
+	private static final long serialVersionUID = -5652756496487561267L;
+	static Logger logger = LoggerFactory.getLogger(CanbusDataServiceImp.class);
+	@Autowired
+	private DriverRepository driverRepository;
+	@Autowired
+	private CarRepository carRepository;
+	@Autowired
+	private DepartmentsRepository departmentsRepository;
+	@Autowired
+	private CanStaticDataBeanService canStaticDataBeanService;
+	@Autowired
+	private CarSectionAnalysisService carSectionAnalysisService;
+	@Autowired
+	private DriverSectionAnalysisService driverSectionAnalysisService;
+	@Autowired
+	private RedisCache redisCache;
+	@Autowired
+	private DriverTaskRepository driverTaskRepository;
+	/**
+	 * 车辆EMS期间报表
+	 */
+	@Override
+	public String getCarSectionAnalysisList(String startTimeStr, String endTimeStr, String clcph) {
+		List<CarSectionAnalysisEntity> carSectionAnalysisEntityList = new ArrayList<CarSectionAnalysisEntity>();
+		try {
+			SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			if (!StringUtils.isNotEmpty(startTimeStr) || !StringUtils.isNotEmpty(endTimeStr))
+				return null;
+			Date startTime = sdf.parse(startTimeStr);
+			Date endTime = sdf.parse(endTimeStr);
+			List<String> carIdList = new ArrayList<String>();
+			// redisCache.getHashSet("canbus_clbdgx").forEach((k, v) ->
+			// carIdList.add(v));
+			Map<String, String> canbusSbmap = redisCache.getHashSet("canbus_clbdgx");
+			String cldmIndex = "";
+			if (StringUtils.isEmpty(clcph)) {
+				canbusSbmap = redisCache.getHashSet("canbus_clbdgx");
+			} else {
+				CarEntity carEntity = carRepository.findByCph(clcph);
+				cldmIndex = carEntity.getCldm();
+			}
+			if (!StringUtils.isNoneEmpty(cldmIndex)) {
+
+			}
+			for (Entry<String, String> entryset : canbusSbmap.entrySet()) {
+
+				String cldm = entryset.getValue();
+				String sbh = entryset.getKey();
+				String clcx;
+				String cph = "0";
+				String dwmc = "长沙邮区中心局";
+				String dwdm = "";
+				try {
+					CarEntity carEntity = carRepository.findOne(cldm);
+					if (carEntity != null) {
+						clcx = carEntity.getClcx();
+						cph = carEntity.getCph();
+						dwdm = carEntity.getSsdwdm();
+						if (StringUtils.isEmpty(dwdm)) {
+							dwmc = "长沙邮区中心局";
+						} else {
+							dwmc = departmentsRepository.findOne(dwdm).getDwmc();
+						}
+					} else {
+						clcx = "整体厢式车";
+						cph = "0";
+					}
+					logger.info("doJob 开始对日期为{}的车辆代码为{}的车进行的分析", startTimeStr, cldm);
+					if (cldm != null) {
+						CarSectionAnalysisEntity carSectionAnalysisEntity = carSectionAnalysisService.getCarSectionAnalysisEntity(cldm, sbh, startTime, endTime);
+						if (carSectionAnalysisEntity != null) {
+							carSectionAnalysisEntity.setCph(cph);
+							carSectionAnalysisEntity.setDwmc(dwmc);
+							carSectionAnalysisEntity.setDwdm(dwdm);
+							carSectionAnalysisEntity.setClcx(clcx);
+							carSectionAnalysisEntity.setFdjxh("4KH1-TCG40");
+							carSectionAnalysisEntity.setCanbussbh(sbh);
+							logger.info("doJob 结束对{}的车{}进行分析", endTimeStr, cldm);
+							carSectionAnalysisEntityList.add(carSectionAnalysisEntity);
+						} else {
+							logger.info("doJob 结束对{}的车{}进行分析,编号为{}车辆无数据", endTimeStr, cldm, cldm);
+						}
+					}
+				} catch (Exception e) {
+					logger.error("对车" + cldm + "分析异常" + e.toString(), e);
+				}
+
+			}
+		} catch (Exception e) {
+			logger.error("对车分析异常" + e.toString(), e);
+		}
+		return JSONObject.toJSONString(carSectionAnalysisEntityList);
+	}
+	/**
+	 * 通过cldm查询车辆EMS期间报表
+	 */
+	@Override
+	public List<String> getCarSectionAnalysisListByCldm(String startTimeStr, String endTimeStr, String cldmStr) {
+		List<String> carSectionAnalysisEntityList = new ArrayList<String>();
+		try {
+			SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			if (!StringUtils.isNotEmpty(startTimeStr) || !StringUtils.isNotEmpty(endTimeStr))
+				return null;
+			Date startTime = sdf.parse(startTimeStr);
+			Date endTime = sdf.parse(endTimeStr);
+
+			Map<String, String> canbusSbmap = redisCache.getHashSet("canbus_clbdgx");
+			Map<String, String> clbhMap = redisCache.getHashSet("canbus_clbdgx");
+			for (Entry<String, String> entry : canbusSbmap.entrySet()) {
+				clbhMap.put(entry.getValue(), entry.getKey());
+			}
+			String cldmIndex = cldmStr;
+			
+			if (StringUtils.isNoneEmpty(cldmIndex)) {
+				String sbh = clbhMap.get(cldmIndex);
+				String cldm = cldmIndex;
+				try {
+					String clcx;
+					String cph = "0";
+					String dwmc = "长沙邮区中心局";
+					String dwdm = "";
+					CarEntity carEntity = carRepository.findOne(cldm);
+					if (carEntity == null) return carSectionAnalysisEntityList;
+						
+					clcx = carEntity.getClcx();
+					if(StringUtils.isEmpty(clcx)) clcx="整体厢式车";
+					cph = carEntity.getCph();
+					dwdm = carEntity.getSsdwdm();
+					if (StringUtils.isEmpty(dwdm)) {
+						dwmc = "长沙邮区中心局";
+					} else {
+						dwmc = departmentsRepository.findOne(dwdm).getDwmc();
+					}
+					CarSectionAnalysisEntity carSectionAnalysisEntity = carSectionAnalysisService.getCarSectionAnalysisEntity(cldm, sbh, startTime, endTime);
+					if (carSectionAnalysisEntity != null) {
+						carSectionAnalysisEntity.setCph(cph);
+						carSectionAnalysisEntity.setDwmc(dwmc);
+						carSectionAnalysisEntity.setDwdm(dwdm);
+						carSectionAnalysisEntity.setClcx(clcx);
+						carSectionAnalysisEntity.setFdjxh("4KH1-TCG40");
+						carSectionAnalysisEntity.setCanbussbh(sbh);
+						logger.info("doJob 结束对{}的车{}进行分析", endTimeStr, cldm);
+						carSectionAnalysisEntityList.add(JSONObject.toJSONString(carSectionAnalysisEntity));
+					}
+				} catch (Exception e) {
+					logger.error("对车" + cldm + "分析异常" + e.toString(), e);
+				}
+				return carSectionAnalysisEntityList;
+			}
+			for (Entry<String, String> entryset : canbusSbmap.entrySet()) {
+
+				String cldm = entryset.getValue();
+				String sbh = entryset.getKey();
+
+				String clcx = "整体厢式车";
+				String cph = "0";
+				String dwmc = "长沙邮区中心局";
+				String dwdm = "";
+				try {
+					CarEntity carEntity = carRepository.findOne(cldm);
+					if (carEntity != null) {
+						clcx = carEntity.getClcx();
+						cph = carEntity.getCph();
+						dwdm = carEntity.getSsdwdm();
+						if(clcx.isEmpty())
+						clcx = "整体厢式车";
+						if (StringUtils.isEmpty(dwdm)) {
+							dwmc = "长沙邮区中心局";
+						} else {
+							dwmc = departmentsRepository.findOne(dwdm).getDwmc();
+						}
+					}
+					logger.info("doJob 开始对日期为{}的车辆代码为{}的车进行的分析", startTimeStr, cldm);
+					if (cldm != null) {
+						CarSectionAnalysisEntity carSectionAnalysisEntity = carSectionAnalysisService.getCarSectionAnalysisEntity(cldm, sbh, startTime, endTime);
+						if (carSectionAnalysisEntity != null) {
+							carSectionAnalysisEntity.setCph(cph);
+							carSectionAnalysisEntity.setDwmc(dwmc);
+							carSectionAnalysisEntity.setDwdm(dwdm);
+							carSectionAnalysisEntity.setClcx(clcx);
+							carSectionAnalysisEntity.setFdjxh("4KH1-TCG40");
+							carSectionAnalysisEntity.setCanbussbh(sbh);
+							logger.info("doJob 结束对{}的车{}进行分析", endTimeStr, cldm);
+							carSectionAnalysisEntityList.add(JSONObject.toJSONString(carSectionAnalysisEntity));
+						} else {
+							logger.info("doJob 结束对{}的车{}进行分析,编号为{}车辆无数据", endTimeStr, cldm, cldm);
+						}
+					}
+				} catch (Exception e) {
+					logger.error("对车" + cldm + "分析异常" + e.toString(), e);
+				}
+
+			}
+		} catch (Exception e) {
+			logger.error("对车分析异常" + e.toString(), e);
+		}
+		return carSectionAnalysisEntityList;
+	}
+	/**
+	 * 通过驾驶员姓名查询驾驶员期间报表
+	 */
+	@Override
+	public List<String> getDriverSectionAnalysisListByJsy(String startTimeStr, String endTimeStr, String cldmStr, List<String> jsydmList) {
+		List<String> driverSectionAnalysisEntityList = new ArrayList<String>();
+		try {
+			SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			if (!StringUtils.isNotEmpty(startTimeStr) || !StringUtils.isNotEmpty(endTimeStr)){
+				return null;
+			}
+			Date startTime = sdf.parse(startTimeStr);
+			Date endTime = sdf.parse(endTimeStr);
+			Map<String, String> canbusSbmap = redisCache.getHashSet("canbus_clbdgx");
+			Map<String, String> clbhMap = new HashMap<String, String>();
+			for (Entry<String, String> entry : canbusSbmap.entrySet()) {
+				clbhMap.put(entry.getValue(), entry.getKey());
+			}
+			String[] jsydms =jsydmList.toArray(new String[jsydmList.size()]);
+			//查询司机
+			List<DriverTaskEntity>	driverTaskList=null;
+			if(jsydms.length>0){
+				driverTaskList= driverTaskRepository.getDriverListByJsydm(startTime, endTime,jsydms );
+			}else{
+				driverTaskList= driverTaskRepository.getDriverListByDate(startTime, endTime);
+			}
+			for (DriverTaskEntity driverTaskEntity : driverTaskList) {
+					String cldm = driverTaskEntity.getCldm();
+					String jsydm =	driverTaskEntity.getJsydm();
+					DriverEntity driverEntity = driverRepository.findOne(jsydm);
+					String clcx="";
+					String cph = "未绑定";
+					String dwmc = "长沙邮区中心局";
+					String dwdm = "";
+					String sbh=clbhMap.get(cldm);
+					String xm = driverEntity.getXm();
+					try {
+						CarEntity carEntity = carRepository.findOne(cldm);
+						if (carEntity == null) continue; 
+							clcx = carEntity.getClcx();
+							cph = carEntity.getCph();
+							dwdm = carEntity.getSsdwdm();
+							if (StringUtils.isEmpty(dwdm)) {
+								dwmc = "长沙邮区中心局";
+							} else {
+								dwmc = departmentsRepository.findOne(dwdm).getDwmc();
+							}
+							if(StringUtils.isEmpty(clcx)){
+								clcx = "整体厢式车";
+							}
+//							if(StringUtils.isEmpty(cph)){
+//								cph = "未绑定";
+//							}
+							DriverSectionAnalysisEntity driverSectionAnalysisEntity = driverSectionAnalysisService.getDriverSectionAnalysisEntity(cldm, sbh, startTime, endTime);
+							if (driverSectionAnalysisEntity != null) {
+								driverSectionAnalysisEntity.setCph(cph);
+								driverSectionAnalysisEntity.setDwmc(dwmc);
+								driverSectionAnalysisEntity.setXm(xm);
+								driverSectionAnalysisEntity.setDwdm(dwdm);
+								driverSectionAnalysisEntity.setClcx(clcx);
+								driverSectionAnalysisEntity.setFdjxh("4KH1-TCG40");
+								driverSectionAnalysisEntity.setCanbussbh(sbh);
+								logger.info("doJob 结束对{}的车{}进行分析", endTimeStr, cldm);
+								driverSectionAnalysisEntityList.add(JSONObject.toJSONString(driverSectionAnalysisEntity));
+							} else {
+								logger.info("doJob 结束对{}的车{}进行分析,编号为{}车辆无数据", endTimeStr, cldm, cldm);
+							}
+					} catch (Exception e) {
+						logger.error("对车" + cldm + "分析异常" + e.toString(), e);
+					}
+					return driverSectionAnalysisEntityList;
+				}
+		} catch (Exception e) {
+			logger.error("对车分析异常" + e.toString(), e);
+		}
+		return driverSectionAnalysisEntityList;
+	}
+	/**
+	 * 获取OBD数据
+	 * @param startTimeStr
+	 * @param endTimeStr
+	 * @param cldm
+	 * @return
+	 */
+	public  List<String>  getCanStaticDataListByDate(String startTimeStr, String endTimeStr, String cldm) {
+		List<String> canStaticDataListByDateList = new ArrayList<String>();
+		try {
+			SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			if (!StringUtils.isNotEmpty(startTimeStr) || !StringUtils.isNotEmpty(endTimeStr))
+				return null;
+			Date startTime = sdf.parse(startTimeStr);
+			Date endTime = sdf.parse(endTimeStr);
+			
+			Map<String, String> canbusSbmap = redisCache.getHashSet("canbus_clbdgx");
+			Map<String, String> clbhMap = redisCache.getHashSet("canbus_clbdgx");
+			for (Entry<String, String> entry : canbusSbmap.entrySet()) {
+				clbhMap.put(entry.getValue(), entry.getKey());
+			}
+			
+			if (StringUtils.isNoneEmpty(cldm)) {
+				String sbh = clbhMap.get(cldm);
+				try {
+					String clcx;
+					String cph = "0";
+					String dwmc = "长沙邮区中心局";
+					String dwdm = "";
+					CarEntity carEntity = carRepository.findOne(cldm);
+					if (carEntity == null) return canStaticDataListByDateList;
+						
+					clcx = carEntity.getClcx();
+					if(StringUtils.isEmpty(clcx)) clcx="整体厢式车";
+					cph = carEntity.getCph();
+					dwdm = carEntity.getSsdwdm();
+					if (StringUtils.isEmpty(dwdm)) {
+						dwmc = "长沙邮区中心局";
+					} else {
+						dwmc = departmentsRepository.findOne(dwdm).getDwmc();
+					}
+					CanStaticDataBean canStaticDataBean = canStaticDataBeanService.getCanStaticDataBean(cldm, sbh, startTime, endTime);
+					if (canStaticDataBean != null) {
+						canStaticDataBean.setCph(cph);
+						canStaticDataBean.setDwmc(dwmc);
+						canStaticDataBean.setDwdm(dwdm);
+						canStaticDataBean.setEquipNum(sbh);
+						logger.info("doJob 结束对{}的车{}进行分析", endTimeStr, cldm);
+						canStaticDataListByDateList.add(JSONObject.toJSONString(canStaticDataBean));
+					}
+				} catch (Exception e) {
+					logger.error("对车" + cldm + "分析异常" + e.toString(), e);
+				}
+				return canStaticDataListByDateList;
+			}
+			for (Entry<String, String> entryset : canbusSbmap.entrySet()) {
+
+				String cldms = entryset.getValue();
+				String sbh = entryset.getKey();
+
+				String clcx = "整体厢式车";
+				String cph = "0";
+				String dwmc = "长沙邮区中心局";
+				String dwdm = "";
+				try {
+					CarEntity carEntity = carRepository.findOne(cldms);
+					if (carEntity != null) {
+						clcx = carEntity.getClcx();
+						cph = carEntity.getCph();
+						dwdm = carEntity.getSsdwdm();
+						if(clcx.isEmpty())
+						clcx = "整体厢式车";
+						if (StringUtils.isEmpty(dwdm)) {
+							dwmc = "长沙邮区中心局";
+						} else {
+							dwmc = departmentsRepository.findOne(dwdm).getDwmc();
+						}
+					}
+					logger.info("doJob 开始对日期为{}的车辆代码为{}的车进行的分析", startTimeStr, cldm);
+					if (cldm != null) {
+						CarSectionAnalysisEntity carSectionAnalysisEntity = carSectionAnalysisService.getCarSectionAnalysisEntity(cldm, sbh, startTime, endTime);
+						if (carSectionAnalysisEntity != null) {
+							carSectionAnalysisEntity.setCph(cph);
+							carSectionAnalysisEntity.setDwmc(dwmc);
+							carSectionAnalysisEntity.setDwdm(dwdm);
+							carSectionAnalysisEntity.setClcx(clcx);
+							carSectionAnalysisEntity.setFdjxh("4KH1-TCG40");
+							carSectionAnalysisEntity.setCanbussbh(sbh);
+							logger.info("doJob 结束对{}的车{}进行分析", endTimeStr, cldm);
+							canStaticDataListByDateList.add(JSONObject.toJSONString(carSectionAnalysisEntity));
+						} else {
+							logger.info("doJob 结束对{}的车{}进行分析,编号为{}车辆无数据", endTimeStr, cldm, cldm);
+						}
+					}
+				} catch (Exception e) {
+					logger.error("对车" + cldm + "分析异常" + e.toString(), e);
+				}
+
+			}
+		} catch (Exception e) {
+			logger.error("对车分析异常" + e.toString(), e);
+		}
+		return canStaticDataListByDateList;
+	}
+		
+}

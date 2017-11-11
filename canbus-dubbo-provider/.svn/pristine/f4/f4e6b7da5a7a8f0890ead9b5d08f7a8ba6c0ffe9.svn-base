@@ -1,0 +1,352 @@
+package com.cpgps.canbus.common.ots;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
+import com.alicloud.openservices.tablestore.AsyncClient;
+import com.alicloud.openservices.tablestore.ClientConfiguration;
+import com.alicloud.openservices.tablestore.SyncClient;
+import com.alicloud.openservices.tablestore.model.AlwaysRetryStrategy;
+import com.alicloud.openservices.tablestore.model.ColumnValue;
+import com.alicloud.openservices.tablestore.model.GetRangeRequest;
+import com.alicloud.openservices.tablestore.model.GetRangeResponse;
+import com.alicloud.openservices.tablestore.model.PrimaryKeyBuilder;
+import com.alicloud.openservices.tablestore.model.PrimaryKeyValue;
+import com.alicloud.openservices.tablestore.model.PutRowRequest;
+import com.alicloud.openservices.tablestore.model.RangeRowQueryCriteria;
+import com.alicloud.openservices.tablestore.model.Row;
+import com.alicloud.openservices.tablestore.model.RowPutChange;
+import com.cpgps.canbus.common.model.MessageBean;
+import com.cpgps.canbus.common.model.realtime.AlarmData;
+import com.cpgps.canbus.common.model.realtime.AlarmHSpeedNeutralData;
+import com.cpgps.canbus.common.model.realtime.AlarmIdlingTooLongData;
+import com.cpgps.canbus.common.model.realtime.AlarmSuperHighEngineSpeedData;
+import com.cpgps.canbus.common.model.realtime.CanStaticData;
+import com.cpgps.canbus.common.model.realtime.EventIdlingData;
+import com.cpgps.canbus.common.model.realtime.EventNeutralData;
+import com.cpgps.canbus.common.model.realtime.EventSuperSpeedData;
+import com.cpgps.canbus.common.model.realtime.EventTroubleCodeData;
+import com.cpgps.canbus.common.model.realtime.GpsLocation;
+import com.cpgps.canbus.common.model.realtime.TravelStatisticalData;
+import com.cpgps.canbus.common.utils.AlarmConst;
+import com.cpgps.canbus.common.utils.Const;
+import com.cpgps.canbus.common.utils.KKTool;
+import com.cpgps.canbus.common.utils.PropertiesUtil;
+import com.cpgps.canbus.dubbo.model.AlarmDataBean;
+import com.cpgps.canbus.repository.entity.can.CanbusAlarmTypeRepository;
+import com.cpgps.canbus.common.utils.DateUtil;
+
+
+/**
+ * Copyright 2017 e6gps. All rights reserved. 写入ots工具类
+ * 
+ * @version: V1.0
+ */
+@Component
+public class TableStoreManager {
+	private final static Logger log = LoggerFactory.getLogger(TableSpaceDBConection.class);
+	private static final long probegin = System.currentTimeMillis();
+	public static final String TABLE_NAME = PropertiesUtil.getValue("tablespace.canbus.tableName");
+	public static final String PK1 = PropertiesUtil.getValue("tablespace.canbus.key1");
+	public static final String PK2 = PropertiesUtil.getValue("tablespace.canbus.key2");
+	public static final String PK3 = PropertiesUtil.getValue("tablespace.canbus.key3");
+	private static String endPoint = PropertiesUtil.getValue("tablespace.endPoint");
+	private static String accessId = PropertiesUtil.getValue("tablespace.accessId");
+	private static String accessKey = PropertiesUtil.getValue("tablespace.accessKey");
+	private static String instanceName = PropertiesUtil.getValue("tablespace.instanceName");
+	public int TABLE_COUNT = 5;
+	public TableStoreManager() {
+		getInstance();
+		getAsyncClient();
+	}
+	// 同步client
+	private static SyncClient syncClinet;
+	// 异步client
+	private static AsyncClient asyncClient;
+
+	// 定义一个静态的方法（调用时再初始化SingletonTest，但是多线程访问时，可能造成重复初始化问题）
+	public static SyncClient getInstance() {
+		// ClientConfiguration提供了很多配置项，以下只列举部分。
+		ClientConfiguration clientConfiguration = new ClientConfiguration();
+		// 设置建立连接的超时时间。
+		clientConfiguration.setConnectionTimeoutInMillisecond(5000);
+		// 设置socket超时时间。
+		clientConfiguration.setSocketTimeoutInMillisecond(5000);
+		// 设置重试策略，若不设置，采用默认的重试策略。
+		clientConfiguration.setRetryStrategy(new AlwaysRetryStrategy());
+
+		if (syncClinet == null) {
+			syncClinet = new SyncClient(endPoint, accessId, accessKey, instanceName, clientConfiguration);
+		}
+		return syncClinet;
+	}
+
+	public static AsyncClient getAsyncClient() {
+		// ClientConfiguration提供了很多配置项，以下只列举部分。
+		ClientConfiguration clientConfiguration = new ClientConfiguration();
+		// 设置建立连接的超时时间。
+		clientConfiguration.setConnectionTimeoutInMillisecond(5000);
+		// 设置socket超时时间。
+		clientConfiguration.setSocketTimeoutInMillisecond(5000);
+		// 设置重试策略，若不设置，采用默认的重试策略。
+		clientConfiguration.setRetryStrategy(new AlwaysRetryStrategy());
+
+		if (asyncClient == null) {
+			asyncClient = new AsyncClient(endPoint, accessId, accessKey, instanceName, clientConfiguration);
+		}
+		return asyncClient;
+	}
+
+	public void putRow(String objStr, AtomicInteger count) {
+		JSONObject obj = JSONObject.parseObject(objStr);
+		short infoType = obj.getShortValue("infoType");
+		String createTime = obj.getString("createTime");
+		Long newTime =KKTool.date2TimeStamp(createTime, "yyyy-MM-dd HH:mm:ss");
+		PrimaryKeyBuilder builder = PrimaryKeyBuilder.createPrimaryKeyBuilder();
+		
+		builder.addPrimaryKeyColumn(TableSpaceDBConection.PK1, PrimaryKeyValue.fromLong(obj.getIntValue("vehicleId")));
+		// gps
+		if (infoType == Const.CMD_INFO_TYPE_07) {
+			builder.addPrimaryKeyColumn(TableSpaceDBConection.PK2, PrimaryKeyValue.fromLong(1));
+			// 静态
+		} else if (infoType == Const.CMD_INFO_TYPE_0A) {
+			builder.addPrimaryKeyColumn(TableSpaceDBConection.PK2, PrimaryKeyValue.fromLong(2));
+			// 统计
+		} else if (infoType == Const.CMD_INFO_TYPE_11) {
+			builder.addPrimaryKeyColumn(TableSpaceDBConection.PK2, PrimaryKeyValue.fromLong(4));
+			// 事件
+		} else {
+			builder.addPrimaryKeyColumn(TableSpaceDBConection.PK2, PrimaryKeyValue.fromLong(3));
+		}
+		builder.addPrimaryKeyColumn(TableSpaceDBConection.PK3, PrimaryKeyValue.fromLong(newTime));
+		RowPutChange putChange = new RowPutChange(TableSpaceDBConection.TABLE_NAME, builder.build());
+		putChange.addColumn("vehicleCode", ColumnValue.fromString(obj.getString("vehicleCode")));
+		putChange.addColumn("reciveTime", ColumnValue.fromString(obj.getString("reciveTime")));
+		putChange.addColumn("equipNum", ColumnValue.fromString(obj.getString("equipNum")));
+		putChange.addColumn("infoType", ColumnValue.fromLong(infoType));
+		switch (infoType) {
+		case Const.CMD_INFO_TYPE_07:
+			putChange.addColumn("gpsLocation", ColumnValue.fromString(obj.getString("gpsLocation")));
+			break;
+		case Const.CMD_INFO_TYPE_09:
+			log.debug("---报警数据:" + 0x09);
+			break;
+		case Const.CMD_INFO_TYPE_0A:
+			putChange.addColumn("CanStaticData", ColumnValue.fromString(obj.getString("canStaticData")));
+			break;
+		case Const.CMD_INFO_TYPE_0B:
+			putChange.addColumn("alarmData", ColumnValue.fromString(obj.getString("alarmData")));
+			break;
+		case Const.CMD_INFO_TYPE_0D:
+			putChange.addColumn("eventSuperSpeedData", ColumnValue.fromString(obj.getString("eventSuperSpeedData")));
+			break;
+		case Const.CMD_INFO_TYPE_0E:
+			putChange.addColumn("eventIdlingData", ColumnValue.fromString(obj.getString("eventIdlingData")));
+			break;
+		case Const.CMD_INFO_TYPE_0F:
+			putChange.addColumn("eventNeutralData", ColumnValue.fromString(obj.getString("eventNeutralData")));
+			break;
+		case Const.CMD_INFO_TYPE_10:
+			putChange.addColumn("eventTroubleCodeData", ColumnValue.fromString(obj.getString("eventTroubleCodeData")));
+			break;
+		case Const.CMD_INFO_TYPE_11:
+			putChange.addColumn("travelStatisticalData", ColumnValue.fromString(obj.getString("travelStatisticalData")));
+			break;
+		}
+		syncClinet.putRow(new PutRowRequest(putChange));
+		count.incrementAndGet();
+	}
+
+	public List<MessageBean> getRange(long vehicleID, Long startTime, Long endTime, int type, AtomicInteger count) {
+		count.incrementAndGet();
+		int num = 0;
+		long begin = System.currentTimeMillis();
+		String cldm=String.valueOf(vehicleID);
+		RangeRowQueryCriteria rangeRowQueryCriteria = new RangeRowQueryCriteria(TableSpaceDBConection.TABLE_NAME);
+		// 设置起始主键
+		PrimaryKeyBuilder primaryKeyBuilder = PrimaryKeyBuilder.createPrimaryKeyBuilder();
+		primaryKeyBuilder.addPrimaryKeyColumn(TableSpaceDBConection.PK1, PrimaryKeyValue.fromString(cldm));
+		primaryKeyBuilder.addPrimaryKeyColumn(TableSpaceDBConection.PK2, PrimaryKeyValue.fromLong(type));
+		primaryKeyBuilder.addPrimaryKeyColumn(TableSpaceDBConection.PK3, PrimaryKeyValue.fromLong(startTime));
+		rangeRowQueryCriteria.setInclusiveStartPrimaryKey(primaryKeyBuilder.build());
+		// 设置结束主键
+		primaryKeyBuilder = PrimaryKeyBuilder.createPrimaryKeyBuilder();
+		primaryKeyBuilder.addPrimaryKeyColumn(TableSpaceDBConection.PK1, PrimaryKeyValue.fromString(cldm));
+		primaryKeyBuilder.addPrimaryKeyColumn(TableSpaceDBConection.PK2, PrimaryKeyValue.fromLong(type));
+		primaryKeyBuilder.addPrimaryKeyColumn(TableSpaceDBConection.PK3, PrimaryKeyValue.fromLong(endTime));
+		rangeRowQueryCriteria.setExclusiveEndPrimaryKey(primaryKeyBuilder.build());
+		rangeRowQueryCriteria.setMaxVersions(1);
+		List<MessageBean> messageBeanList = new ArrayList<MessageBean>();
+		// 默认读取所有的属性列
+		while (true) {
+			GetRangeResponse getRangeResponse = syncClinet.getRange(new GetRangeRequest(rangeRowQueryCriteria));
+			for (Row row : getRangeResponse.getRows()) {
+				MessageBean messageBean = new MessageBean();
+				messageBean.setVehicleId(String.valueOf(row.getPrimaryKey().getPrimaryKeyColumn("c_cldm").getValue()));
+				messageBean.setCreateTime(row.getPrimaryKey().getPrimaryKeyColumn("createTime").getValue().toString());
+				messageBean.setVehicleCode(row.getLatestColumn("vehicleCode").getValue().asString());
+				messageBean.setEquipNum(String.valueOf(row.getLatestColumn("equipNum").getValue()));
+				int infoType = Integer.parseInt(String.valueOf(row.getLatestColumn("infoType").getValue()));
+				messageBean.setInfoType(infoType);
+				switch (infoType) {
+				case Const.CMD_INFO_TYPE_07:
+					messageBean.setGpsLocation(JSON.parseObject(row.getLatestColumn("gpsLocation").getValue().asString(), GpsLocation.class));
+					break;
+				case Const.CMD_INFO_TYPE_09:
+					log.debug("---报警数据:" + 0x09);
+					break;
+				case Const.CMD_INFO_TYPE_0A:
+					messageBean.setCanStaticData(JSON.parseObject(row.getLatestColumn("CanStaticData").getValue().asString(), CanStaticData.class));
+					break;
+				case Const.CMD_INFO_TYPE_0B:
+					messageBean.setAlarmData(JSON.parseObject(row.getLatestColumn("alarmData").getValue().asString(), AlarmData.class));
+					switch (messageBean.getAlarmData().getAlarmType()) {
+					case 0x0006:// 汽车怠速过长上报[怠速时间过长附带信息]
+						break;
+					case 0x2001:// 汽车怠速过长告警结束[怠速时间过长附带信息]
+						String jsonStr = row.getLatestColumn("alarmData").getValue().asString();
+						JSONObject jsonObj = JSON.parseObject(jsonStr);
+						AlarmIdlingTooLongData alarmIdlingTooLongData = JSON.parseObject(jsonObj.get("alarmIncidentalData").toString(), AlarmIdlingTooLongData.class);
+						messageBean.getAlarmData().setAlarmIncidentalData(alarmIdlingTooLongData);
+						break;
+					case 0x2006:// 高速空档滑行报警结束[高速空档滑行报警附加信息]
+						String jsonStr2 = row.getLatestColumn("alarmData").getValue().asString();
+						JSONObject jsonObj2 = JSON.parseObject(jsonStr2);
+						AlarmHSpeedNeutralData alarmHSpeedNeutralData = JSON.parseObject(jsonObj2.get("alarmIncidentalData").toString(), AlarmHSpeedNeutralData.class);
+						messageBean.getAlarmData().setAlarmIncidentalData(alarmHSpeedNeutralData);
+						break;
+					case 0x0700:// 超高转速报警[超高转速报警附带信息]
+						break;
+					case 0x2007:// 超高转速报警结束[超高转速报警附带信息]
+						String jsonStr3 = row.getLatestColumn("alarmData").getValue().asString();
+						JSONObject jsonObj3 = JSON.parseObject(jsonStr3);
+						AlarmSuperHighEngineSpeedData alarmSuperHighEngineSpeedData = JSON.parseObject(jsonObj3.get("alarmIncidentalData").toString(), AlarmSuperHighEngineSpeedData.class);
+						messageBean.getAlarmData().setAlarmIncidentalData(alarmSuperHighEngineSpeedData);
+						break;
+					case AlarmConst.CMD_INFO_TYPE_0003: break;//	设防上报
+					case AlarmConst.CMD_INFO_TYPE_0004: break;//	撤防上报
+					case AlarmConst.CMD_INFO_TYPE_0005: break;//	低电压报警  
+					case AlarmConst.CMD_INFO_TYPE_0007: break;//	车门非法打开 
+					case AlarmConst.CMD_INFO_TYPE_0008: break;//	碰撞报警
+					case AlarmConst.CMD_INFO_TYPE_0009: break;//	拖车报警
+					case AlarmConst.CMD_INFO_TYPE_000A: break;//	翻车报警
+					case AlarmConst.CMD_INFO_TYPE_000B: break;//	定位过长报警
+					case AlarmConst.CMD_INFO_TYPE_0013: break;//	非法点火报警
+					case AlarmConst.CMD_INFO_TYPE_0014: break;//	故障码报警
+					case AlarmConst.CMD_INFO_TYPE_010B: break;//	水温报警
+					case AlarmConst.CMD_INFO_TYPE_2002: break;//	水温报警结束
+					case AlarmConst.CMD_INFO_TYPE_010c: break;//	超速报警
+					case AlarmConst.CMD_INFO_TYPE_2003: break;//	超速报警结束
+					case AlarmConst.CMD_INFO_TYPE_0205: break;//	RTC硬件故障报警
+					case AlarmConst.CMD_INFO_TYPE_010D: break;//	高速空档滑行报警[高速空档滑行报警附加信息]
+					case AlarmConst.CMD_INFO_TYPE_010E: break;//	疲劳驾驶报警
+					case AlarmConst.CMD_INFO_TYPE_2004: break;//	疲劳驾驶报警结束
+					case AlarmConst.CMD_INFO_TYPE_011F: break;//	低水温高转速报警
+					case AlarmConst.CMD_INFO_TYPE_2005: break;//	低水温高转速报警结束
+					case AlarmConst.CMD_INFO_TYPE_010F: break;//	转速过高报警
+					case AlarmConst.CMD_INFO_TYPE_011A: break;//	油耗不支持报警
+					case AlarmConst.CMD_INFO_TYPE_011B: break;//	OBD不支持报警
+					case AlarmConst.CMD_INFO_TYPE_0302: break;//	锁车失败提醒
+					case AlarmConst.CMD_INFO_TYPE_0303: break;//	超时未设防提醒
+					case AlarmConst.CMD_INFO_TYPE_0301: break;//	设防玻璃未关提醒
+					case AlarmConst.CMD_INFO_TYPE_000c: break;//	终端拔出报警
+					case AlarmConst.CMD_INFO_TYPE_000d: break;//	终端插入报警
+					case AlarmConst.CMD_INFO_TYPE_100d: break;//	TF ERROR
+					case AlarmConst.CMD_INFO_TYPE_000e: break;//	GPS 模块故障报警
+					case AlarmConst.CMD_INFO_TYPE_100e: break;//	刷卡器故障
+					case AlarmConst.CMD_INFO_TYPE_000f: break;//	FLASH故障报警
+					case AlarmConst.CMD_INFO_TYPE_0010: break;//	CAN 模块故障报警
+					case AlarmConst.CMD_INFO_TYPE_0011: break;//	3D传感器故障报警
+					case AlarmConst.CMD_INFO_TYPE_0012: break;//	TTS模块故障报警
+					case AlarmConst.CMD_INFO_TYPE_0019: break;//	SOS报警
+					case AlarmConst.CMD_INFO_TYPE_0401: break;//	车机失联报警
+					case AlarmConst.CMD_INFO_TYPE_0402: break;//	车机复联报警
+					case AlarmConst.CMD_INFO_TYPE_0403: break;//	车机疑似插入报警
+					case AlarmConst.CMD_INFO_TYPE_0404: break;//	车机疑似拔出报警
+					case AlarmConst.CMD_INFO_TYPE_0505: break;//	车机进入电篱
+					case AlarmConst.CMD_INFO_TYPE_0506: break;//	车机离开电篱
+					case AlarmConst.CMD_INFO_TYPE_0507: break;//	在电篱内超速
+					case AlarmConst.CMD_INFO_TYPE_0508: break;//	在电篱内停留时间过长
+					case AlarmConst.CMD_INFO_TYPE_0509: break;//	在电篱内点火
+					case AlarmConst.CMD_INFO_TYPE_0510: break;//	在电篱内熄火
+					case AlarmConst.CMD_INFO_TYPE_0405: break;//	休息时间不足
+					case AlarmConst.CMD_INFO_TYPE_6001: break;//	急加速
+					case AlarmConst.CMD_INFO_TYPE_6002: break;//	急减速
+					case AlarmConst.CMD_INFO_TYPE_6003: break;//	急转弯
+					case AlarmConst.CMD_INFO_TYPE_6004: break;//	BOX正常报警
+					case AlarmConst.CMD_INFO_TYPE_6005: break;//	BOX故障报警
+					case AlarmConst.CMD_INFO_TYPE_6006: break;//	感应器故障
+					case AlarmConst.CMD_INFO_TYPE_6007: break;//	车门打开
+					case AlarmConst.CMD_INFO_TYPE_6008: break;//	车门关闭
+					case AlarmConst.CMD_INFO_TYPE_6009: break;//	感应器OK
+					case AlarmConst.CMD_INFO_TYPE_6010: break;//	电线短路
+					case AlarmConst.CMD_INFO_TYPE_6011: break;//	电线开路
+					case AlarmConst.CMD_INFO_TYPE_6012: break;//	电池故障
+					case AlarmConst.CMD_INFO_TYPE_0304: break;//	外接传感器告别警
+					case AlarmConst.CMD_INFO_TYPE_0305: break;//	电动车充电开始
+					case AlarmConst.CMD_INFO_TYPE_0306: break;//	电动车充电结束
+					case AlarmConst.CMD_INFO_TYPE_0501: break;//	终端主电断电告警
+					case AlarmConst.CMD_INFO_TYPE_0502: break;//	GPS天线开路报警
+					case AlarmConst.CMD_INFO_TYPE_0503: break;//	GPS天线短路报警
+					case AlarmConst.CMD_INFO_TYPE_0504: break;//	车机未固定报警
+					case AlarmConst.CMD_INFO_TYPE_0042: break;//	OBD通信异常中断
+					case AlarmConst.CMD_INFO_TYPE_0520: break;//	故障灯异常报警
+					case AlarmConst.CMD_INFO_TYPE_0511: break;//	定位异常报警
+					case AlarmConst.CMD_INFO_TYPE_0512: break;//	误报点熄火异常报警
+					case AlarmConst.CMD_INFO_TYPE_0513: break;//	车机不休眠异常报警
+					case AlarmConst.CMD_INFO_TYPE_0514: break;//	点熄火上报异常报警
+					case AlarmConst.CMD_INFO_TYPE_0515: break;//	OBD适配异常报警
+					case AlarmConst.CMD_INFO_TYPE_0516: break;//	油量低报警
+					case AlarmConst.CMD_INFO_TYPE_0517: break;//	插入工装报警
+					case AlarmConst.CMD_INFO_TYPE_0518: break;//	OBD适配成功
+					case AlarmConst.CMD_INFO_TYPE_0519: break;//	OBD适配失败
+					case AlarmConst.CMD_INFO_TYPE_00A1: break;//	断油断电报警
+					case AlarmConst.CMD_INFO_TYPE_10A1: break;//	断油断电报警--状态打开 
+					case AlarmConst.CMD_INFO_TYPE_10A2: break;//	断油断电报警--状态关闭
+					}
+					break;
+				case Const.CMD_INFO_TYPE_0D:
+					messageBean.setEventSuperSpeedData(JSON.parseObject(row.getLatestColumn("eventSuperSpeedData").getValue().asString(), EventSuperSpeedData.class));
+					break;
+				case Const.CMD_INFO_TYPE_0E:
+					messageBean.setEventIdlingData(JSON.parseObject(row.getLatestColumn("eventIdlingData").getValue().asString(), EventIdlingData.class));
+					break;
+				case Const.CMD_INFO_TYPE_0F:
+					messageBean.setEventNeutralData(JSON.parseObject(row.getLatestColumn("eventNeutralData").getValue().asString(), EventNeutralData.class));
+					break;
+				case Const.CMD_INFO_TYPE_10:
+					messageBean.setEventTroubleCodeData(JSON.parseObject(row.getLatestColumn("eventTroubleCodeData").getValue().asString(), EventTroubleCodeData.class));
+					break;
+				case Const.CMD_INFO_TYPE_11:
+					messageBean.setTravelStatisticalData(JSON.parseObject(row.getLatestColumn("travelStatisticalData").getValue().asString(), TravelStatisticalData.class));
+					break;
+				}
+				messageBeanList.add(messageBean);
+			}
+			
+			num += getRangeResponse.getRows().size();
+			log.info("*********OTS返回车辆编号{}，查询起始日期{}-结束日期{}，类型编号{}数据条数：{}*********", vehicleID,startTime,endTime, type, getRangeResponse.getRows().size());
+			// 若nextStartPrimaryKey不为null, 则继续读取.
+			if (getRangeResponse.getNextStartPrimaryKey() != null) {
+				rangeRowQueryCriteria.setInclusiveStartPrimaryKey(getRangeResponse.getNextStartPrimaryKey());
+			} else {
+				count.decrementAndGet();
+				break;
+			}
+		} 
+		
+		long end = System.currentTimeMillis();
+		log.info("**********消耗时间:" + (end - begin) + ",计数:" + count.incrementAndGet() + ",总条数：" + num + ",总时间：" + (end - probegin) + ",平均每秒:" + (((double) num / (end - begin)) * 1000)+"*********");
+		return messageBeanList;
+	}
+}

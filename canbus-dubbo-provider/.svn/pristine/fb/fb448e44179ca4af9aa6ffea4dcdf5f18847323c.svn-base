@@ -1,0 +1,100 @@
+package com.cpgps.canbus.dubbo.model;
+
+import java.io.Serializable;
+import java.util.Date;
+
+public class AlarmDataBean implements Serializable{
+	private static final long serialVersionUID = -3515124935461602214L;
+	private String vehicleCode; //车辆代码
+	private Integer vehicleId;//车辆编号
+    private Integer vehicleNum;//车辆车牌
+    private Integer driverId;//驾驶员编号
+    private String equipNum;//设备号
+    private long createTime;//创建时间
+    private long reciveTime;//接收时间
+    private int infoType;//类型
+	private int alarmType;//事件类型
+	private String alarmName; //事件名称
+	private long alarmStartTime;//事件开始时间
+	private long alarmEndTime;//事件结束时间
+	private long steayTime;//事件持续时间
+	public String getVehicleCode() {
+		return vehicleCode;
+	}
+	public void setVehicleCode(String vehicleCode) {
+		this.vehicleCode = vehicleCode;
+	}
+	public Integer getVehicleId() {
+		return vehicleId;
+	}
+	public void setVehicleId(Integer vehicleId) {
+		this.vehicleId = vehicleId;
+	}
+	public String getEquipNum() {
+		return equipNum;
+	}
+	public void setEquipNum(String equipNum) {
+		this.equipNum = equipNum;
+	}
+	public long getCreateTime() {
+		return createTime;
+	}
+	public void setCreateTime(long createTime) {
+		this.createTime = createTime;
+	}
+	public long getReciveTime() {
+		return reciveTime;
+	}
+	public void setReciveTime(long reciveTime) {
+		this.reciveTime = reciveTime;
+	}
+	public int getInfoType() {
+		return infoType;
+	}
+	public void setInfoType(int infoType) {
+		this.infoType = infoType;
+	}
+	public int getAlarmType() {
+		return alarmType;
+	}
+	public void setAlarmType(int alarmType) {
+		this.alarmType = alarmType;
+	}
+	public String getAlarmName() {
+		return alarmName;
+	}
+	public void setAlarmName(String alarmName) {
+		this.alarmName = alarmName;
+	}
+	public long getAlarmStartTime() {
+		return alarmStartTime;
+	}
+	public void setAlarmStartTime(long alarmStartTime) {
+		this.alarmStartTime = alarmStartTime;
+	}
+	public long getAlarmEndTime() {
+		return alarmEndTime;
+	}
+	public void setAlarmEndTime(long alarmEndTime) {
+		this.alarmEndTime = alarmEndTime;
+	}
+	public Integer getVehicleNum() {
+		return vehicleNum;
+	}
+	public void setVehicleNum(Integer vehicleNum) {
+		this.vehicleNum = vehicleNum;
+	}
+	public Integer getDriverId() {
+		return driverId;
+	}
+	public void setDriverId(Integer driverId) {
+		this.driverId = driverId;
+	}
+	public long getSteayTime() {
+		return steayTime;
+	}
+	public void setSteayTime(long steayTime) {
+		this.steayTime = steayTime;
+	}
+	
+}

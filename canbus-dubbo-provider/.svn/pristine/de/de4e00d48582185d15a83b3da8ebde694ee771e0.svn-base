@@ -1,0 +1,11 @@
+package com.cpgps.canbus.dubbo.service;
+
+import java.util.Date;
+
+import com.cpgps.canbus.dubbo.model.CanStaticDataBean;
+
+public interface CanStaticDataBeanService {
+
+	CanStaticDataBean getCanStaticDataBean(String cldm, String sbh, Date startTime, Date endTime);
+
+}
